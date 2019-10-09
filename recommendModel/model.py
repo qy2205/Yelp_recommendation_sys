@@ -2,6 +2,7 @@
 import sqlite3
 import warnings
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 
@@ -67,13 +68,10 @@ class RecommendModel:
             df = pd.DataFrame(row, columns=descript)
             return df
 
-   def read_review(self,user=True, resID=None):
+   def read_review(self):
       cursor = None
       try:
-         if user:
-            cursor = self.conn.execute("SELECT * FROM REVIEW WHERE user_id = ? ", (self.userID,))
-         else:
-            cursor = self.conn.execute("SELECT * FROM REVIEW WHERE business_id = ? ", (resID,))
+         cursor = self.conn.execute("SELECT * FROM REVIEW WHERE user_id = ? ", (self.userID,))
 
       finally:
          if cursor is None:
@@ -146,24 +144,64 @@ class RecommendModel:
    def user_filter(self, userInfo):
       # user based
 
-      other=[]
+      otherUserID=[]
 
       resInfo = self.read_business(False, True)
-      userReviewInfo = self.read_review(user=True)
+      userReviewInfo = self.read_review()
       noReviewRes = resInfo[~resInfo['business_id'].isin(userReviewInfo.get("business_id").values)]
+      noReviewResID = noReviewRes["business_id"].values
 
-      for noReviewResID in noReviewRes["business_id"].values:
-         print(noReviewResID)
-         resReviewInfo = self.read_review(user=False,resID=noReviewResID)
-         other.append(resReviewInfo["user_id"].values)
+      cursor = self.conn.execute("SELECT user_id FROM REVIEW WHERE business_id IN {} ".format(tuple(noReviewResID)))
+      for row in cursor:
+         otherUserID.append(row[0])
 
-      print(len(other))
+      # filter out multiple users
+      otherUserID=list(set(otherUserID))
 
-      if self.prefer(userReviewInfo):
-         return
-      return
+      print('Not Reviewed Restaurant Count In This Location: '+str(len(noReviewResID)))
+      print('Number of Other People Who Reviewed Those Restaurant: '+str(len(otherUserID)))
+
+      # Prepare this users' similarity w.r.t other users
+      dfSimilar = self.similarity(otherUserID, userInfo)
+
+      # Prepare other users' preference on rest of the restaurant
+      cursor = self.conn.execute("SELECT stars,user_id,business_id FROM REVIEW WHERE (business_id IN {}) AND (user_id IN {}) ".format(tuple(noReviewResID),tuple(otherUserID)))
+      descript = [x[0] for x in cursor.description]
+      dfTmp= pd.DataFrame(cursor,columns=descript)
+      dfTmp.drop_duplicates(subset="user_id",inplace=True)
+      dfPrefer = dfTmp.pivot(index="user_id", columns="business_id", values="stars")
+      dfPrefer.fillna(0,inplace=True)
+      dfPrefer.sort_index(inplace=True)
+
+      # Matrix multiply to get score
+      arrScore=np.dot(np.transpose(dfSimilar.to_numpy()),dfPrefer.to_numpy())
+      dfScore=pd.DataFrame(arrScore,columns=dfPrefer.columns,index=["score"])
+      print(dfScore.sort_values(by="score", axis=1,ascending=False))
 
 
+   def similarity(self,otherUserID, userInfo):
+
+      # Need Update Later
+      ## Here we use the simplest way:
+      ### If people have similar avg_stars, they tend to have similar preference
+      cursor = self.conn.execute("SELECT average_stars,user_id FROM USER WHERE user_id IN {} ".format(tuple(otherUserID)))
+      descript = [x[0] for x in cursor.description]
+      row = cursor.fetchall()
+      df = pd.DataFrame(row,columns=descript)
+      df.set_index("user_id",inplace=True)
+      del df.index.name
+
+      # 1-Dimension distance to measure similarity
+      ## Need update later
+      starDiff=np.array([x-userInfo["average_stars"].values[0] for x in df["average_stars"].values])
+
+      # min-max normalize to [0,1] then use 1-x use as similarity: the bigger the similar
+      similarScore=1-(abs(starDiff-np.min(starDiff)))/(np.max(starDiff)-np.min(starDiff))
+      similarDF = pd.DataFrame(similarScore,index=df.index,columns=["similarity"])
+      similarDF.sort_index(inplace=True)
+      return similarDF
+
+   '''
    def prefer(self, reviewInfo):
       # Now we using a simple comparison: stars v.s. threshold
       ## Need Update later, use a weighted avg of #(cool, useful, funny).
@@ -171,6 +209,7 @@ class RecommendModel:
       if reviewInfo.get("stars").values[0] > self.preferThresh:
          return True
       return False
+   '''
 
    def content_filter(self,userInfo):
       # content based: cold start
