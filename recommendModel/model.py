@@ -17,6 +17,8 @@ class RecommendModel:
 
    def hyper_param(self):
       self.preferThresh = 4
+      self.regisThresh = 10
+      self.reviewNumThresh = 2
 
    def open_connect(self):
       # build connection
@@ -111,25 +113,13 @@ class RecommendModel:
                         openIndex.append(i)
                return df.loc[openIndex]
 
-   def test(self):
-      self.open_connect()
-
-      self.define_user()
-
-
-      #df_user=self.read_user()
-      #df_review=self.read_review()
-      #print(df_user["review_count"])
-      #print(df_review["stars"])
-      self.close_connect()
-
    def define_user(self):
       self.open_connect()
       userInfo=self.read_user()
       registDays=(datetime.now()-datetime.strptime(userInfo["yelping_since"].values[0],"%Y-%m-%d %H:%M:%S")).days
 
       # new user
-      if registDays <= 10 and userInfo["review_count"].values[0] <= 2:
+      if registDays <= self.regisThresh and userInfo["review_count"].values[0] <= self.reviewNumThresh:
          print("New User")
          self.content_filter(userInfo)
 
@@ -224,4 +214,15 @@ class RecommendModel:
       ### update later
       return
 
+   def test(self):
+      self.open_connect()
+
+      self.define_user()
+
+
+      #df_user=self.read_user()
+      #df_review=self.read_review()
+      #print(df_user["review_count"])
+      #print(df_review["stars"])
+      self.close_connect()
 
